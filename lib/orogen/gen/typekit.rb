@@ -1327,7 +1327,7 @@ module OroGen
                         io.puts "#include <#{path}>"
                     end
                     io.flush
-                    result = IO.popen(["gccxml", "--preprocess", *includes, *defines, io.path]) do |io|
+                    result = IO.popen(["gccxml", "--preprocess", *includes, *defines, "-m64", io.path]) do |io|
                         io.read
                     end
                     if !$?.success?
@@ -2112,6 +2112,9 @@ module OroGen
                 includes.to_set.map do |inc|
                     "#include <#{inc}>"
                 end.sort.join("\n") + "\n"
+            end
+            def relative_path(file, *subdir)
+                "#{Pathname.new(file).relative_path_from(Pathname.new(File.join(automatic_dir, *subdir)))}"
             end
 	end
     end
