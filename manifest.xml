@@ -4,30 +4,21 @@
         Orocos Realtime Toolkit. Moreover, it generates the specified modules,
         thus offering an easy and fast development process.
     </description>
-    <author>Sylvain Joyeux/sylvain.joyeux@m4x.org</author>
+    <maintainer>Sylvain Joyeux/sylvain.joyeux@m4x.org</maintainer>
     <copyright>
         DFKI/robotik@dfki.de
         Sylvain Joyeux/sylvain.joyeux@m4x.org
     </copyright>
     <license>GPL v2 or later</license>
-    <url>http://doudou.github.com/orogen</url>
+    <url>http://rock-robotics.org/documentation/orogen</url>
 
     <depend package="rtt" />
     <depend package="typelib" />
-    <!--
-    Disabled for now, until I know whether tools/service_discovery will be moved
-    to orocos-toolchain or not
-    <depend package="tools/service_discovery" optional="1" />
-    -->
     <depend package="rtt_typelib" />
-    <rosdep name="libxslt" />
-    <rosdep name="nokogiri" />
+    <depend package="utilrb" />
+    <depend package="metaruby" />
+    <depend_optional package="kramdown" />
     <rosdep name="rake" />
     <rosdep name="ruby" />
-    <!--
-    <rosdep name="webgen" type="doc" />
-    <rosdep name="coderay" type="doc" />
-    <rosdep name="rdoc" type="doc" />
-    -->
 </package>
 

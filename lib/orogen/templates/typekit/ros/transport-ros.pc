@@ -1,0 +1,23 @@
+# Generated from orogen/lib/orogen/templates/typekit/ros/transport-ros.pc
+
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${prefix}/lib/orocos/types
+includedir=${prefix}/include/orocos
+
+project_name=<%= typekit.name %>
+<% if typekit.project %>
+deffile=${prefix}/share/orogen/<%= File.basename(typekit.project.deffile) %>
+<% end %>
+type_registry=${prefix}/share/orogen/<%= typekit.name %>.tlb
+rosmap=${prefix}/share/orogen/<%= typekit.name %>.rosmap
+
+Name: <%= typekit.name %>ROSTransport
+Version: <%= typekit.version %>
+<% unless typekit.internal_dependencies.empty? %>
+Requires: <%= typekit.internal_dependencies.map { |n, v| v ? "#{n} >= #{v}" : n.to_s }.join(", ") %>
+<% end %>
+Description: <%= typekit.name %> types support for the Orocos type system
+Libs: -L${libdir} -l@libname_ros@
+Cflags: -I${includedir}
+

@@ -1,4 +1,4 @@
-module Orocos
+module OroGen
     module Spec
         # Generic representation of ports. The actual ports are either
         # instance of InputPort or OutputPort
@@ -11,6 +11,31 @@ module Orocos
 	    attr_reader :type
             # The port type name
             def type_name; type.name end
+            # The port name as it is registered on RTT
+            def orocos_type_name
+                Typelib::Registry.rtt_typename(type)
+            end
+
+            # Converts this model into a representation that can be fed to e.g.
+            # a JSON dump, that is a hash with pure ruby key / values.
+            #
+            # The generated hash has the following keys:
+            #
+            #     name: the name
+            #     type: the type (as marshalled with Typelib::Type#to_h)
+            #     direction: either the string 'input' or 'output'
+            #     doc: the documentation string
+            #
+            # @return [Hash]
+            def to_h
+                Hash[
+                    direction: (if kind_of?(OutputPort) then 'output' else 'input' end),
+                    name: name,
+                    type: type.to_h,
+                    doc: (doc || "")
+                ]
+            end
+
 
             # Stores the policy for keeping last values. It can be nil, :initial or true
             #
@@ -29,23 +54,23 @@ module Orocos
                 value
             end
 
-            # True if the component supports only static connections on this
+            # True if the task context supports only static connections on this
             # port, and false otherwise
             #
             # See #static for more details.
             def static?; !!@static end
 
             # Declares that this port can be connected/disconnected only when
-            # the component is in a non-running state.
+            # the task context is in a non-running state.
             #
             # The default is that the port is dynamic, i.e. can be
-            # connected/disconnected regardless of the component's state.
+            # connected/disconnected regardless of the task context's state.
             #
             # See also #dynamic
             def static; @static = true end
 
             # Declares that this port can be connected/disconnected while the
-            # component is running. It is the opposite of #static.
+            # task context is running. It is the opposite of #static.
             #
             # This is the default
             def dynamic; @static = false end
@@ -57,7 +82,7 @@ module Orocos
             # True if this is a dynamic port model, false otherwise
             def dynamic?; false end
 
-	    def initialize(task, name, type)
+	    def initialize(task, name, type, options = Hash.new)
                 if !name.kind_of?(Regexp)
                     name = name.to_s
                     if name !~ /^\w+$/
@@ -68,14 +93,15 @@ module Orocos
                 end
 
                 if type
-                    type = task.component.find_interface_type(type)
-                    Orocos.validate_toplevel_type(type)
+                    type = task.project.find_interface_type(type)
+                    OroGen.validate_toplevel_type(type)
                     if type.name == "/std/vector<double>"
-                        Orocos::Generation.warn "#{type.name} is used as the port type for #{name}, logging it will not be possible"
+                        Spec.warn "#{type.name} is used as the port type for #{name}, logging it will not be possible"
                     end
                 end
 		@task, @name, @type = task, name, type
 
+                @doc = nil
                 @max_sizes = Hash.new
                 keep_last_written_value :initial
 	    end

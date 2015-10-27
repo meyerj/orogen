@@ -27,57 +27,50 @@
 # These variables are used in tasks/CMakeLists.txt to actually build the shared
 # object.
 
-include_directories(${PROJECT_SOURCE_DIR}/<%= Generation::AUTOMATIC_AREA_NAME %>)
+include_directories(${CMAKE_CURRENT_LIST_DIR}/../../<%= Generation::AUTOMATIC_AREA_NAME %>)
 
-<% if component.typekit %>
-include_directories(${PROJECT_SOURCE_DIR}/<%= Generation::AUTOMATIC_AREA_NAME %>/typekit)
-list(APPEND <%= component.name.upcase %>_TASKLIB_DEPENDENT_LIBRARIES 
-    <%= component.name %>-typekit-${OROCOS_TARGET})
+<% if project.typekit %>
+include_directories(${CMAKE_CURRENT_LIST_DIR}/../../<%= Generation::AUTOMATIC_AREA_NAME %>/typekit)
+list(APPEND <%= project.name.upcase %>_TASKLIB_DEPENDENT_LIBRARIES 
+    <%= project.name %>-typekit)
 <% end %>
 
-<%= dependencies = component.tasklib_dependencies
+<%= dependencies = project.tasklib_dependencies
     Generation.cmake_pkgconfig_require(dependencies) %>
 <% dependencies.each do |dep_def|
    next if !dep_def.in_context?('link') %>
-list(APPEND <%= component.name.upcase %>_TASKLIB_DEPENDENT_LIBRARIES ${<%= dep_def.var_name %>_LIBRARIES})
+list(APPEND <%= project.name.upcase %>_TASKLIB_DEPENDENT_LIBRARIES ${<%= dep_def.var_name %>_LIBRARIES})
 <% if dep_def.var_name =~ /TASKLIB/ %>
-list(APPEND <%= component.name.upcase %>_TASKLIB_INTERFACE_LIBRARIES ${<%= dep_def.var_name %>_LIBRARIES})
+list(APPEND <%= project.name.upcase %>_TASKLIB_INTERFACE_LIBRARIES ${<%= dep_def.var_name %>_LIBRARIES})
 <% end %>
 <% end %>
 
-CONFIGURE_FILE(${PROJECT_SOURCE_DIR}/<%= Generation::AUTOMATIC_AREA_NAME %>/tasks/<%= component.name %>-tasks.pc.in
-    ${CMAKE_CURRENT_BINARY_DIR}/<%= component.name %>-tasks-${OROCOS_TARGET}.pc @ONLY)
-INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/<%= component.name %>-tasks-${OROCOS_TARGET}.pc
+CONFIGURE_FILE(${CMAKE_CURRENT_LIST_DIR}/../../<%= Generation::AUTOMATIC_AREA_NAME %>/tasks/<%= project.name %>-tasks.pc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/<%= project.name %>-tasks-${OROCOS_TARGET}.pc @ONLY)
+INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/<%= project.name %>-tasks-${OROCOS_TARGET}.pc
     DESTINATION lib/pkgconfig)
 
 <% 
    include_files = []
    task_files = []
-   component.self_tasks.each do |task| 
+   project.self_tasks.each do |task| 
      if !task_files.empty?
 	 task_files << "\n    "
      end
-     task_files << "${CMAKE_SOURCE_DIR}/#{Generation::AUTOMATIC_AREA_NAME}/tasks/#{task.basename}Base.cpp"
+     task_files << "${CMAKE_CURRENT_LIST_DIR}/../../#{Generation::AUTOMATIC_AREA_NAME}/tasks/#{task.basename}Base.cpp"
      task_files << "#{task.basename}.cpp"
-     include_files << "${CMAKE_SOURCE_DIR}/#{Generation::AUTOMATIC_AREA_NAME}/tasks/#{task.basename}Base.hpp"
+     include_files << "${CMAKE_CURRENT_LIST_DIR}/../../#{Generation::AUTOMATIC_AREA_NAME}/tasks/#{task.basename}Base.hpp"
      include_files << "#{task.basename}.hpp"
    end
 %>
 
-set(<%= component.name.upcase %>_TASKLIB_NAME <%= component.name %>-tasks-${OROCOS_TARGET})
-set(<%= component.name.upcase %>_TASKLIB_SOURCES <%= task_files.sort.join(";") %>)
-set(<%= component.name.upcase %>_TASKLIB_HEADERS <%= include_files.sort.join(";") %>)
+add_definitions(-DRTT_COMPONENT)
+set(<%= project.name.upcase %>_TASKLIB_NAME <%= project.name %>-tasks-${OROCOS_TARGET})
+set(<%= project.name.upcase %>_TASKLIB_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/../../<%= Generation::AUTOMATIC_AREA_NAME %>/tasks/DeployerComponent.cpp
+    <%= task_files.sort.join(";") %>)
+set(<%= project.name.upcase %>_TASKLIB_HEADERS <%= include_files.sort.join(";") %>)
 include_directories(${OrocosRTT_INCLUDE_DIRS})
 link_directories(${OrocosRTT_LIBRARY_DIRS})
 add_definitions(${OrocosRTT_CFLAGS_OTHER})
-
-orogen_pkg_check_modules(OrocosOCL "orocos-ocl-${OROCOS_TARGET}>=2.1.0")
-if (OrocosOCL_FOUND)
-    message(STATUS "OCL found, the generated task library will be compatible with the deployer component")
-    add_definitions(-DRTT_COMPONENT)
-    include_directories(${OrocosOCL_INCLUDE_DIRS})
-    list(APPEND <%= component.name.upcase %>_TASKLIB_SOURCES "${CMAKE_SOURCE_DIR}/<%= Generation::AUTOMATIC_AREA_NAME %>/tasks/DeployerComponent.cpp")
-else()
-    message(STATUS "OCL not found, the generated task library won't be loadable by the deployer component")
-endif()
 

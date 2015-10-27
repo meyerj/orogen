@@ -1,28 +1,31 @@
 /* Generated from orogen/lib/orogen/templates/tasks/TaskBase.hpp */
 
-#ifndef <%= component.name.upcase %>_<%= task.basename.upcase %>_TASK_BASE_HPP
-#define <%= component.name.upcase %>_<%= task.basename.upcase %>_TASK_BASE_HPP
+#ifndef <%= project.name.upcase %>_<%= task.basename.upcase %>_TASK_BASE_HPP
+#define <%= project.name.upcase %>_<%= task.basename.upcase %>_TASK_BASE_HPP
 
-#include <string>
-#include <boost/cstdint.hpp>
 #include <<%= task.superclass.header_file %>>
-<% if !task.new_operations.empty? || task.superclass.name == "RTT::TaskContext" then %>#include <rtt/Operation.hpp><% end %>
-<% unless task.self_ports.empty? %>#include <rtt/Port.hpp><% end %>
 
-
+<% if !task.new_operations.empty? || task.superclass.name == "RTT::TaskContext" %>
+#include <rtt/Operation.hpp>
+<% end %>
+<% if !task.self_ports.empty? %>
+#include <rtt/Port.hpp>
+<% end %>
 <% if task.extended_state_support? %>
-#include <<%= component.typekit.name %>/<%= component.name %>TaskStates.hpp>
+#include <<%= project.typekit.name %>/TaskStates.hpp>
 <% end %>
 
 
 <% task.used_typekits.sort_by(&:name).each do |tk| %>
   <% next if tk.virtual? %>
-#include <<%= tk.name %>/Types.hpp>
+#include <<%= tk.name %>/typekit/Types.hpp>
 <% end %>
 <% task.implemented_classes.sort.each do |class_name, include_file| %>
 #include <<%= include_file %>> // to get <%= class_name %>
 <% end %>
-<% if component.typekit %>#include "<%= component.typekit.name %>/Types.hpp"<% end %>
+<% if project.typekit %>
+#include "<%= project.typekit.name %>/typekit/Types.hpp"
+<% end %>
 
 <% code_before, code_after =
     task.base_header_code.partition(&:first)
@@ -32,7 +35,7 @@
 
 <%= code_before.sort.join("\n") %>
 
-namespace <%= component.name %> {
+namespace <%= project.name %> {
     class <%= task.basename %>;
     /** The oroGen-generated part of <%= task.name %>
      *

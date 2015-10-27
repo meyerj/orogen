@@ -1,8 +1,11 @@
-module Orocos
+module OroGen
     module TypekitMarshallers
     module Corba
     class Plugin
-        def initialize
+        attr_reader :typekit
+        def initialize(typekit)
+            @typekit = typekit
+
             Typelib::Type          .extend(TypekitMarshallers::Corba::Type)
             Typelib::NumericType   .extend(TypekitMarshallers::Corba::NumericType)
             Typelib::ContainerType .extend(TypekitMarshallers::Corba::ContainerType)
@@ -15,11 +18,11 @@ module Orocos
         def self.name; "corba" end
         def name; "corba" end
 
-        def dependencies(typekit)
+        def dependencies
             result = []
             typekit.used_typekits.each do |tk|
                 next if tk.virtual?
-                build_dep = Orocos::Generation::BuildDependency.new(
+                build_dep = Gen::RTT_CPP::BuildDependency.new(
                     tk.name.upcase + "_TRANSPORT_CORBA",
                     tk.pkg_transport_name('corba'))
                 build_dep.in_context('corba', 'include')
@@ -28,7 +31,7 @@ module Orocos
             end
 	    typekit.used_libraries.each do |pkg|
 		needs_link = typekit.linked_used_libraries.include?(pkg)
-		result << Orocos::Generation::BuildDependency.new(pkg.name.upcase, pkg.name).
+		result << Gen::RTT_CPP::BuildDependency.new(pkg.name.upcase, pkg.name).
 		    in_context('corba', 'include')
 		if needs_link
 		    result.last.in_context('corba', 'link')
@@ -39,7 +42,7 @@ module Orocos
 
         def separate_cmake?; true end
 
-        def generate(typekit, typesets)
+        def generate(typesets)
             headers, impl = [], []
 
             idl_registry = typesets.minimal_registry.dup
@@ -51,45 +54,44 @@ module Orocos
             end
             idl_registry.clear_aliases
             
-            idl = Orocos::Generation.render_template "typekit", "corba", "Types.idl", binding
+            idl = Gen::RTT_CPP.render_template "typekit", "corba", "Types.idl", binding
             idl_file = typekit.save_automatic("transports", "corba",
                 "#{typekit.name}Types.idl", idl)
 
-            code  = Generation.render_template "typekit", "corba", "Convertions.hpp", binding
-            headers << typekit.save_automatic("transports", "corba",
-                    "Convertions.hpp", code)
-            code  = Generation.render_template "typekit", "corba", "Convertions.cpp", binding
+            code  = Gen::RTT_CPP.render_template "typekit", "corba", "Convertions.cpp", binding
             impl << typekit.save_automatic("transports", "corba",
                     "Convertions.cpp", code)
 
-            code  = Generation.render_template "typekit", "corba", "TransportPlugin.hpp", binding
+            code  = Gen::RTT_CPP.render_template "typekit", "corba", "TransportPlugin.hpp", binding
             headers << typekit.save_automatic("transports", "corba",
                     "TransportPlugin.hpp", code)
-            code  = Generation.render_template "typekit", "corba", "TransportPlugin.cpp", binding
+            code  = Gen::RTT_CPP.render_template "typekit", "corba", "TransportPlugin.cpp", binding
             impl << typekit.save_automatic("transports", "corba",
                     "TransportPlugin.cpp", code)
 
             code_snippets = typesets.interface_types.map do |type|
                 target_type = typekit.intermediate_type_for(type)
-                code  = Generation.render_template "typekit", "corba", "Type.cpp", binding
+                code  = Gen::RTT_CPP.render_template "typekit", "corba", "Type.cpp", binding
                 [type, code]
             end
             impl += typekit.render_typeinfo_snippets(code_snippets, "transports", "corba")
 
-            code  = Generation.render_template "typekit", "corba", "Registration.hpp", binding
+            code  = Gen::RTT_CPP.render_template "typekit", "corba", "Registration.hpp", binding
             typekit.save_automatic("transports", "corba", "Registration.hpp", code)
 
             impl = impl.map do |path|
                 typekit.cmake_relative_path(path, "transports", "corba")
-            end
+            end.sort
             headers = headers.map do |path|
                 typekit.cmake_relative_path(path, "transports", "corba")
-            end
+            end.sort
 
-            pkg_config = Generation.render_template "typekit", "corba", "transport-corba.pc", binding
+            pkg_config = Gen::RTT_CPP.render_template "typekit", "corba", "transport-corba.pc", binding
             typekit.save_automatic("transports", "corba", "#{typekit.name}-transport-corba.pc.in", pkg_config)
-            code = Generation.render_template "typekit", "corba", "CMakeLists.txt", binding
+            code = Gen::RTT_CPP.render_template "typekit", "corba", "CMakeLists.txt", binding
             typekit.save_automatic("transports", "corba", "CMakeLists.txt", code)
+            cmake_build = Gen::RTT_CPP.render_template "typekit", "corba", "build.cmake", binding
+            typekit.save_automatic("transports", "corba", "build.cmake", cmake_build)
 
             # We generate our own CMake code, no need to export anything to the
             # main typekit code
@@ -111,6 +113,26 @@ module Orocos
 	    "orogen#{namespace('::')}Corba"
 	end
 
+        def to_corba_signature(typekit, options = Hash.new)
+            target_type = typekit.intermediate_type_for(self)
+            "bool #{options[:namespace]}toCORBA( #{target_type.corba_ref_type} corba, #{arg_type} value )"
+        end
+
+        def to_corba_array_signature(typekit, options = Hash.new)
+            target_type = typekit.intermediate_type_for(self)
+            "bool #{options[:namespace]}toCORBA( #{target_type.corba_ref_type} corba, #{arg_type} value, int length )"
+        end
+
+        def from_corba_signature(typekit, options = Hash.new)
+            target_type = typekit.intermediate_type_for(self)
+            "bool #{options[:namespace]}fromCORBA( #{ref_type} value, #{target_type.corba_arg_type} corba )"
+        end
+
+        def from_corba_array_signature(typekit, options = Hash.new)
+            target_type = typekit.intermediate_type_for(self)
+            "bool #{options[:namespace]}fromCORBA( #{ref_type} value, int length, #{target_type.corba_arg_type} corba )"
+        end
+
         def corba_arg_type; "#{corba_name} const&" end
         def corba_ref_type; "#{corba_name}&" end
 
@@ -124,8 +146,14 @@ module Orocos
         def inline_fromCorba(result, value, indent)
             "#{indent}#{result} = #{value};\n"
         end
+        def inline_fromAny(any_var, corba_var, indent)
+            "#{indent}if (!(#{any_var} >>= #{corba_var})) return false;"
+        end
         def inline_toCorba(result, value, indent)
             "#{indent}#{result} = #{value};\n"
+        end
+        def inline_toAny(any_var, corba_var, indent)
+            "#{indent}#{any_var} <<= #{corba_var};"
         end
     end
 
@@ -135,7 +163,11 @@ module Orocos
 		if name == "/bool"
 		    "CORBA::Boolean"
                 elsif size == 1
-                    "CORBA::Octet"
+                    if unsigned?
+                        "CORBA::Octet"
+                    else
+                        "CORBA::Char"
+                    end
                 elsif size == 2
                     "CORBA::#{'U' if unsigned?}Short"
                 elsif size == 4
@@ -154,6 +186,33 @@ module Orocos
                     raise "unexpected floating-point size #{size}"
                 end
 	    end
+        end
+    end
+
+    ::Typelib::specialize_model '/uint8_t' do
+        def inline_fromAny(any_var, corba_var, indent)
+            "#{indent}#{any_var} >>= CORBA::Any::to_octet(#{corba_var});"
+        end
+        def inline_toAny(any_var, corba_var, indent)
+            "#{indent}#{any_var} <<= CORBA::Any::from_octet(#{corba_var});"
+        end
+    end
+
+    ::Typelib::specialize_model '/int8_t' do
+        def inline_fromAny(any_var, corba_var, indent)
+            "#{indent}#{any_var} >>= CORBA::Any::to_char(#{corba_var});"
+        end
+        def inline_toAny(any_var, corba_var, indent)
+            "#{indent}#{any_var} <<= CORBA::Any::from_char(#{corba_var});"
+        end
+    end
+
+    ::Typelib::specialize_model '/bool' do
+        def inline_fromAny(any_var, corba_var, indent)
+            "#{indent}#{any_var} >>= CORBA::Any::to_boolean(#{corba_var});"
+        end
+        def inline_toAny(any_var, corba_var, indent)
+            "#{indent}#{any_var} <<= CORBA::Any::from_boolean(#{corba_var});"
         end
     end
 
@@ -278,6 +337,11 @@ module Orocos
                 result << indent << "    corba = orogen#{namespace}Corba::#{name};\n"
                 result << indent << "    break;\n"
             end
+            result << <<-EOT
+#{indent}  default:
+#{indent}    RTT::log(RTT::Error) << "orogen_typekits::toCORBA() invalid value '" << (int)value << "' for enum '#{cxx_name}'" << RTT::endlog();
+#{indent}    return false;
+EOT
             result << indent << "}\n"
 	end
 	def from_corba(typekit, result, indent)
@@ -292,6 +356,11 @@ module Orocos
                 result << indent << "    value = #{namespace}#{name};\n"
                 result << indent << "    break;\n"
             end
+            result << <<-EOT
+#{indent}  default:
+#{indent}    RTT::log(RTT::Error) << "orogen_typekits::fromCORBA() invalid value '" << (int)corba << "' for enum '#{cxx_name}'" << RTT::endlog();
+#{indent}    return false;
+EOT
             result << indent << "}\n"
 	end
     end
@@ -375,8 +444,6 @@ if (!fromCORBA(*intermediate, corba))
             end
         end
     end
-
-    Orocos::Generation::Typekit.register_plugin(Plugin)
 
     end
     end

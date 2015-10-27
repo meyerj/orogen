@@ -1,4 +1,4 @@
-module Orocos
+module OroGen
     module Spec
         ACTIVITY_TYPES = {
             :fd_driven    => 'FileDescriptorActivity',
@@ -25,12 +25,18 @@ module Orocos
                     default
                 end
             end
+
+            # Called at registration time so that the extension can apply some default stuff
+            #
+            # @param [TaskContext]
+            def registered_on(task_context)
+            end
         end
 
-        # Model of a task context, i.e. a component interface
+        # Model of a task context, i.e. a task context interface
         #
         # The corresponding code generation support is done in
-        # Orocos::Generation::TaskContextGeneration
+        # {Gen::RTT_CPP::TaskContextGeneration}
 	class TaskContext
 	    # The oroGen project this task is part of
 	    attr_reader :project
@@ -42,6 +48,34 @@ module Orocos
             #   
             # Gets or sets the documentation string for this task context
             dsl_attribute :doc
+
+            class << self
+                # @return [Symbol] set of method names that should be called on
+                #   the newly created task at creation time. This is meant to
+                #   register some default extensions automatically
+                attr_reader :default_extensions
+                attr_reader :extensions_disabled
+
+                def disable_default_extensions
+                    @extensions_disabled = true
+                end
+
+                def enable_default_extensions
+                    @extensions_disabled = false
+                end
+
+                def apply_default_extensions(task_context)
+                    if !extensions_disabled
+                        default_extensions.each do |ext|
+                            task_context.send(ext)
+                        end
+                    end
+                end
+            end
+            @extensions_disabled = false
+            @default_extensions = Array.new
+
+            enumerate_inherited_map 'default_extension', 'default_extensions'
 
             # Set of extensions registered for this task
             #
@@ -62,6 +96,7 @@ module Orocos
                     raise ArgumentError, "there is already an extension called #{name}: #{old}"
                 else
                     extensions << obj
+                    obj.registered_on(self)
                 end
             end
 
@@ -103,12 +138,7 @@ module Orocos
                 end
             end
 
-            # for backward compatibility reasons
-            def component # :nodoc:
-                project
-            end
-
-            def to_s; "#<#<Orocos::Generation::TaskContext>: #{name}>" end
+            def to_s; "#<OroGen::Spec::TaskContext: #{name}>" end
             def inspect; to_s end
 
 	    # The task name
@@ -131,19 +161,29 @@ module Orocos
             # Declares that this task context is a subclass of the following
             # TaskContext class. +task_context+ can either be a class name or a
             # TaskContext instance. In both cases, it must be defined in the
-            # scope of the enclosing Component object -- i.e. either defined in
-            # it, or imported by a Component#using_task_library call.
+            # scope of the enclosing Project object -- i.e. either defined in
+            # it, or imported by a Project#using_task_library call.
             def subclasses(task_context)
-                if @superclass != @project.default_task_superclass
-                    raise ConfigError, "#{@name} tries to subclass #{task_context} "+
-                        "while there is already #{@superclass.name}"
+                if task_context.respond_to?(:to_str)
+                    if @superclass != project.default_task_superclass
+                        raise OroGen::ConfigError, "#{@name} tries to subclass #{task_context} "+
+                            "while there is already #{@superclass.name}"
+                    end
+                    @superclass = project.task_model_from_name task_context
+                else
+                    @superclass = task_context
                 end
-                @superclass = project.find_task_context task_context
-                @default_activity = @superclass.default_activity.dup
+                @default_activity  = @superclass.default_activity.dup
                 @required_activity = @superclass.required_activity?
                 if !superclass
                     raise ArgumentError, "no such task context #{task_context}"
                 end
+            end
+
+            # Declares that this task context is a root model and
+            # does not have a superclass
+            def root_model
+                @superclass = nil
             end
 
             # Declares that this task context is also a subclass of the
@@ -156,7 +196,7 @@ module Orocos
             # +name+. +name+ can either be a string or a regular expression.
             def implements?(name)
                 ancestor_names = ancestors.map(&:name)
-                class_name == name ||
+                self.name == name ||
                     ancestor_names.include?(name)
             end
 
@@ -173,7 +213,7 @@ module Orocos
             #   worstcase_processing_time value
             #
             # Sets or gets the worst-case computation time (i.e. time spent in
-            # 'update') for this component. This should usually not be set in
+            # 'update') for this task context. This should usually not be set in
             # the oroGen file, but in the supervision/deployment code, since the
             # actual computation time will depend on the system.
             #
@@ -244,18 +284,16 @@ module Orocos
             # True if this task context is defined by one of our dependencies.
             attr_predicate :external_definition?, true
 
-	    # Create a new task context in the given component and with
+	    # Create a new task context in the given project and with
 	    # the given name. If a block is given, it is evaluated
 	    # in the context of the newly created TaskContext object.
 	    #
 	    # TaskContext objects should not be created directly. You should
-	    # use Component#task_context for that.
+	    # use {Project#task_context} for that.
 	    def initialize(project, name = nil)
                 @project  = project
 
-                if !name || (name != "RTT::TaskContext")
-                    @superclass = project.default_task_superclass
-                end
+                @superclass = project.default_task_superclass
                 @implemented_classes = []
 		@name = name
                 # This is an array, as we don't want to have it reordered
@@ -271,7 +309,7 @@ module Orocos
                 @dynamic_ports = Array.new
                 @event_ports = Hash.new
                 @initial_state = 'Stopped'
-
+                @default_extensions = Array.new
                 @fixed_initial_state = false
                 @needs_configuration = false
 
@@ -279,7 +317,11 @@ module Orocos
                 ## WARN: is deterministic
                 @extensions = Array.new
 
-                super if defined? super
+                super()
+
+                if block_given?
+                    instance_eval(&proc)
+                end
 	    end
 
             def initialize_copy(from)
@@ -315,7 +357,14 @@ module Orocos
 		pp.text "------- #{name} ------"
                 pp.breakable
                 if doc
-                    pp.text doc.to_s
+                    first_line = true
+                    doc.split("\n").each do |line|
+                        pp.breakable if !first_line
+                        first_line = false
+                        pp.text "# #{line}"
+                    end
+                    pp.breakable
+                    pp.text "# "
                 else
                     pp.text "no documentation defined for this task context model"
                 end
@@ -374,13 +423,15 @@ module Orocos
                 other_model.each_port do |p|
                     if target_name = name_mappings[p.name]
                         p = p.dup
-                        p.instance_variable_set(:@name, target_name)
+                        p.instance_variable_set(:@name, target_name.to_str)
                     end
 
                     if has_port?(p.name)
                         self_port = find_port(p.name)
-                        if (self_port.class != p.class || self_port.type != p.type)
-                            raise ArgumentError, "cannot merge as the output port #{self_port.name} have different meanings"
+                        if self_port.class != p.class
+                            raise ArgumentError, "cannot merge as #{self_port.name} is a #{self_port.class} in #{self} and a #{p.class} in #{other_model}"
+                        elsif self_port.type != p.type
+                            raise ArgumentError, "cannot merge as #{self_port.name} is of type #{self_port.type} in #{self} and of type #{p.type} in #{other_model}"
                         end
                     elsif p.kind_of?(OutputPort)
                         @output_ports[p.name] = p
@@ -427,28 +478,42 @@ module Orocos
             # Create a new attribute with the given name, type and default value
             # for this task. This returns an Attribute instance representing
             # the new attribute, whose methods can be used to configure it
-            # further. +type+ is the type name for that attribute.  It
-            # can be either in Typelib notation (/std/string) or in C++
-            # notation (std::string). This type must be defined either by the
-            # component's own typekit, or by typekits imported with
-            # Component#load_typekit.
+            # further. +type+ is the type name for that attribute.
             #
-            # The generated task context will have a <tt>_[attribute name]</tt>
-            # attribute of class RTT::Attribute<type>.
-            #
-            # For instance, the following definition
+            # @example
             #   attribute('device_name', '/std/string/, '').
             #       doc 'the device name to connect to'
-            #
-            # Will generate a task context with a <tt>_device_name</tt>
-            # attribute of type RTT::Attribute<std::string>.
 	    def attribute(name, type, default_value = nil)
-                name = name.to_s if name.respond_to?(:to_sym)
-		type = project.find_interface_type(type)
+		@attributes[name] = att = configuration_object(Attribute, name, type, default_value)
+                Spec.load_documentation(att, /attribute/)
+                att
+	    end
+
+            def configuration_object(klass, name, type, default_value)
+                name = OroGen.verify_valid_identifier(name)
                 check_uniqueness(name)
 
-		@attributes[name] = Attribute.new(self, name, type, default_value)
-	    end
+                begin
+                    type = project.find_interface_type(type)
+                rescue Typelib::NotFound => e
+                    raise ConfigError, "invalid type #{type}: #{e.message}", e.backtrace
+                end
+
+                if default_value
+                    accepted = [Numeric, Symbol, String, TrueClass, FalseClass].
+                        any? { |valid_klass| default_value.kind_of?(valid_klass) }
+                    if !accepted
+                        raise ArgumentError, "default values for #{klass.name.downcase} can be specified only for simple types (numeric, string and boolean)"
+                    end
+                    begin
+                        Typelib.from_ruby(default_value, type)
+                    rescue Typelib::UnknownConversionRequested => e
+                        raise ArgumentError, e.message, e.backtrace
+                    end
+                end
+
+		klass.new(self, name, type, default_value)
+            end
 
             # Create a new property with the given name, type and default value
             # for this task. This returns the Property instance representing
@@ -456,47 +521,35 @@ module Orocos
             # property further. +type+ is the type name for that property.  It
             # can be either in Typelib notation (/std/string) or in C++
             # notation (std::string). This type must be defined either by the
-            # component's own typekit, or by typekits imported with
-            # Component#load_typekit.
+            # project's own typekit, or by typekits imported with
+            # Project#load_typekit.
             #
-            # The generated task context will have a <tt>_[property name]</tt>
-            # property of class RTT::Property<type>.
-            #
-            # For instance, the following definition
+            # @example
             #   property('device_name', '/std/string/, '').
             #       doc 'the device name to connect to'
-            #
-            # Will generate a task context with a <tt>_device_name</tt>
-            # attribute of type RTT::Property<std::string>.
 	    def property(name, type, default_value = nil)
-                name = Generation.verify_valid_identifier(name)
-                check_uniqueness(name)
-
-                begin
-                    type = project.find_interface_type(type)
-                rescue Typelib::NotFound
-                    raise ConfigError, "type #{type} is not declared"
-                end
-
-                if default_value
-                    accepted = [Numeric, Symbol, String, TrueClass, FalseClass].
-                        any? { |klass| default_value.kind_of?(klass) }
-                    if !accepted
-                        raise ArgumentError, "property default values can be specified only for simple types (numeric, string and boolean)"
-                    end
-                    begin
-                        Typelib.from_ruby(default_value, type)
-                    rescue TypeError => e
-                        raise ArgumentError, e.message, e.backtrace
-                    end
-                end
-
-		@properties[name] = Property.new(self, name, type, default_value)
+		@properties[name] = prop = configuration_object(Property, name, type, default_value)
+                Spec.load_documentation(prop, /property/)
+                prop
 	    end
 
             # True if this task has a property with that name
             def has_property?(name)
                 !!find_property(name)
+            end
+
+            # Make an existing property dynamic
+            #
+            # @return [Property] the property object
+            def make_property_dynamic(name)
+                prop = find_property(name)
+                if !prop
+                    raise ArgumentError, "The requested property " + name + " could not be found"
+                end
+                property = @properties[name] = prop.dup
+                property.task = self
+                property.dynamic
+                property
             end
 
             # Asks orogen to implement the extended state support interface in
@@ -514,12 +567,12 @@ module Orocos
                     if state_port.kind_of?(InputPort)
                         raise ArgumentError, 
                             "there is already an input port called 'state', cannot enable extended state support"
-                    elsif state_port.type != project.find_type("/int")
+                    elsif state_port.type != project.find_type("/int32_t")
                         raise ArgumentError, 
                             "there is already an output port called 'state', but it is not of type 'int' (found #{state_port.type_name}"
                     end
                 else
-                    output_port('state', '/int').
+                    output_port('state', '/int32_t').
                         triggered_once_per_update
                 end
 
@@ -696,13 +749,11 @@ module Orocos
 
             # Create a new operation with the given name. Use the returned
             # Operation object to configure it further
-	    #
-            # In Orocos, an operation publishes a C++ method to the component
-            # interface. The operation can then be called by other components
-            # remotely or locally, and synchronoulsy as well as asynchronously.
 	    def operation(name)
-                name = Generation.verify_valid_identifier(name)
-		@operations[name] = Operation.new(self, name)
+                name = OroGen.verify_valid_identifier(name)
+		@operations[name] = op = Operation.new(self, name)
+                Spec.load_documentation(op, /operation/)
+                op
 	    end
 
             # Defines an operation whose implementation is in the Base class
@@ -710,7 +761,7 @@ module Orocos
             def hidden_operation(name, body)
                 op = operation(name)
                 op.hidden = true
-                op.body = body
+                op.base_body = body
                 op
             end
 
@@ -721,6 +772,7 @@ module Orocos
             #
             # Yields all dynamic input ports that are defined on this task context.
             def each_dynamic_input_port(only_self = false)
+                return enum_for(:each_dynamic_input_port, only_self) if !block_given?
                 each_dynamic_port do |port|
                     if port.kind_of?(InputPort)
                         yield(port)
@@ -735,6 +787,7 @@ module Orocos
             #
             # Yields all dynamic output ports that are defined on this task context.
             def each_dynamic_output_port(only_self = false)
+                return enum_for(:each_dynamic_output_port, only_self) if !block_given?
                 each_dynamic_port do |port|
                     if port.kind_of?(OutputPort)
                         yield(port)
@@ -921,12 +974,15 @@ module Orocos
             # corresponding OutputPort object.
 	    #
 	    # See also #input_port
-	    def output_port(name, type)
-                name = Generation.verify_valid_identifier(name)
+	    def output_port(name, type, options = Hash.new)
+                name = OroGen.verify_valid_identifier(name)
                 check_uniqueness(name)
-                @output_ports[name] = OutputPort.new(self, name, type)
-            rescue Typelib::NotFound
-                raise ConfigError, "type #{type} is not declared"
+                options = Kernel.validate_options options,
+                    :class => OutputPort
+
+                @output_ports[name] = port = options[:class].new(self, name, type)
+                Spec.load_documentation(port, /output_port/)
+                port
 	    end
 
 	    # call-seq:
@@ -936,12 +992,72 @@ module Orocos
             # corresponding InputPort object.
 	    #
 	    # See also #output_port
-	    def input_port(name, type)
-                name = Generation.verify_valid_identifier(name)
+	    def input_port(name, type, options = Hash.new)
+                name = OroGen.verify_valid_identifier(name)
                 check_uniqueness(name)
-                @input_ports[name] = InputPort.new(self, name, type)
-            rescue Typelib::NotFound
-                raise ConfigError, "type #{type} is not declared"
+                options = Kernel.validate_options options,
+                    :class => InputPort
+
+                @input_ports[name] = port = options[:class].new(self, name, type)
+                Spec.load_documentation(port, /input_port/)
+                port
+            end
+
+            # This method is an easier way use boost::shared_ptr in a task
+            # context interface. For instance, instead of writing
+            #
+            #   input_port 'image', '/boost/shared_ptr</Image>'
+            #
+            # you can write
+            #
+            #   input_port 'image', shared_ptr('/Image')
+            #
+            # Additionally, this method makes sure that the corresponding type
+            # is actually defined on the project's typekit.
+            def shared_ptr(name)
+                base_type = project.resolve_type(name)
+                full_name = "/boost/shared_ptr<#{base_type.name}>"
+                begin
+                    project.resolve_type(full_name)
+                rescue Typelib::NotFound
+                    # HACK: this is needed for the codegen part. Will have to go
+                    # HACK: away once we migrate the codegen part to the
+                    # HACK: loading infrastructure
+                    if project.typekit(true).respond_to?(:shared_ptr)
+                        project.typekit(true).shared_ptr(name)
+                        project.resolve_type(full_name)
+                    else raise
+                    end
+                end
+            end
+
+            # This method is an easier way use boost::shared_ptr in a task
+            # context interface. For instance, instead of writing
+            #
+            #   input_port 'image', '/RTT/ReadOnlyPointer</Image>'
+            #
+            # you can write
+            #
+            #   input_port 'image', ro_ptr('/Image')
+            #
+            # Additionally, this method makes sure that the corresponding type
+            # is actually defined on the project's typekit.
+            def ro_ptr(name)
+                base_type = project.resolve_type(name)
+
+                full_name = "/RTT/extras/ReadOnlyPointer<#{base_type.name}>"
+                begin
+                    project.resolve_type(full_name)
+                rescue Typelib::NotFound
+                    # HACK: this is needed for the codegen part. Will have to go
+                    # HACK: away once we migrate the codegen part to the
+                    # HACK: loading infrastructure
+                    if project.typekit(true).respond_to?(:ro_ptr)
+                        project.typekit(true).ro_ptr(name)
+                        project.resolve_type(full_name)
+                    else raise
+                    end
+                end
             end
 
             def all_ports
@@ -995,6 +1111,23 @@ module Orocos
                 !!find_output_port(name)
             end
 
+
+            # Return true if this task interface has an dynamic property.
+            def has_dynamic_properties?
+                self_properties.each do |p|
+                    return true if p.dynamic?
+                end
+                return false
+            end
+            
+            # Return true if this task interface has an dynamic property.
+            def has_dynamic_attributes?
+                self_attributes.each do |p|
+                    return true if p.dynamic?
+                end
+                return false
+            end
+
             # call-seq:
             #   dynamic_input_port name_regex, typename
             #
@@ -1032,7 +1165,7 @@ module Orocos
                 if type
                     type = project.find_type(type)
                 end
-                dynamic_ports.find_all { |p| p.kind_of?(InputPort) && (!type || !p.type || p.type == type) && p.name === name }
+                each_dynamic_input_port.find_all { |p| (!type || !p.type || p.type == type) && p.name === name }
             end
 
             # Returns true if there is an input port definition that match the
@@ -1049,7 +1182,7 @@ module Orocos
                 if type
                     type = project.find_type(type)
                 end
-                dynamic_ports.find_all { |p| p.kind_of?(OutputPort) && (!type || !p.type || p.type == type) && p.name === name }
+                each_dynamic_output_port.find_all { |p| (!type || !p.type || p.type == type) && p.name === name }
             end
 
             # Returns true if an output port of the given name and type could be
@@ -1166,6 +1299,51 @@ module Orocos
                 label << "</TABLE>"
                 result << "  t#{object_id} [label=<#{label}>]"
                 result
+            end
+
+            # If true, then the initial state of this class cannot be specified.
+            # For orogen-declared tasks, it is the same as
+            # #needs_configuration?. This mechanism is here for classes that
+            # have not been generated by orogen and either have a no way to
+            # specify the initial state, or a non-standard one.
+            def fixed_initial_state?; @fixed_initial_state || needs_configuration? || (superclass.fixed_initial_state? if superclass) end
+
+            # Declares that the initial state of this class cannot be specified.
+            # For orogen-declared tasks, it is the same as
+            # #needs_configuration?. This mechanism is here for classes that
+            # have not been generated by orogen and either have a no way to
+            # specify the initial state, or a non-standard one.
+            def fixed_initial_state; @fixed_initial_state = true end
+
+            # Converts this model into a representation that can be fed to e.g.
+            # a JSON dump, that is a hash with pure ruby key / values.
+            #
+            # The generated hash has the following keys:
+            #
+            #     name: the name
+            #     superclass: the name of this model's superclass (if there is
+            #       one)
+            #     states: the list of defined states, as formatted by
+            #       {each_state}
+            #     ports: the list of ports, as formatted by {Port#to_h}
+            #     properties: the list of properties, as formatted by
+            #       {ConfigurationObject#to_h}
+            #     attributes: the list of attributes, as formatted by
+            #       {ConfigurationObject#to_h}
+            #     operations: the list of operations, as formatted by
+            #       {Operation#to_h}
+            #
+            # @return [Hash]
+            def to_h
+                Hash[
+                    name: name,
+                    superclass: superclass.name,
+                    states: each_state.to_a,
+                    ports: each_port.map(&:to_h),
+                    properties: each_property.map(&:to_h),
+                    attributes: each_attribute.map(&:to_h),
+                    operations: each_operation.map(&:to_h)
+                ]
             end
 	end
     end

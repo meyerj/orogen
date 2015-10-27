@@ -1,11 +1,11 @@
 /* Generated from orogen/lib/orogen/templates/tasks/Task.hpp */
 
-#ifndef <%= component.name.upcase %>_<%= task.basename.upcase %>_TASK_HPP
-#define <%= component.name.upcase %>_<%= task.basename.upcase %>_TASK_HPP
+#ifndef <%= project.name.upcase %>_<%= task.basename.upcase %>_TASK_HPP
+#define <%= project.name.upcase %>_<%= task.basename.upcase %>_TASK_HPP
 
-#include "<%= component.name.downcase %>/<%= task.basename %>Base.hpp"
+#include "<%= project.name.downcase %>/<%= task.basename %>Base.hpp"
 
-namespace <%= component.name %> {
+namespace <%= project.name %> {
 
     /*! \class <%= task.basename %> 
      * \brief The task context provides and requires services. It uses an ExecutionEngine to perform its functions.
@@ -16,7 +16,7 @@ namespace <%= component.name %> {
      * The name of a TaskContext is primarily defined via:
      \verbatim
      deployment 'deployment_name'
-         task('custom_task_name','<%= "#{component.name}::#{task.basename}" %>')
+         task('custom_task_name','<%= "#{project.name}::#{task.basename}" %>')
      end
      \endverbatim
      *  It can be dynamically adapted when the deployment is called with a prefix argument. 
@@ -28,7 +28,7 @@ namespace <%= component.name %> {
 
 <%= task.self_user_methods.sort_by(&:name).
     map { |m| m.with_indent(8, :declaration) }.
-    compact.join("\n") %>
+    compact.join("\n\n") %>
 
     public:
         /** TaskContext constructor for <%= task.basename %>
@@ -62,14 +62,14 @@ namespace <%= component.name %> {
          end
          \endverbatim
          */
-        // bool configureHook();
+        bool configureHook();
 
         /** This hook is called by Orocos when the state machine transitions
          * from Stopped to Running. If it returns false, then the component will
          * stay in Stopped. Otherwise, it goes into Running and updateHook()
          * will be called.
          */
-        // bool startHook();
+        bool startHook();
 
         /** This hook is called by Orocos when the component is in the Running
          * state, at each activity step. Here, the activity gives the "ticks"
@@ -85,7 +85,7 @@ namespace <%= component.name %> {
          * component is stopped and recover() needs to be called before starting
          * it again. Finally, FatalError cannot be recovered.
          */
-        // void updateHook();
+        void updateHook();
 
         /** This hook is called by Orocos when the component is in the
          * RunTimeError state, at each activity step. See the discussion in
@@ -93,18 +93,18 @@ namespace <%= component.name %> {
          *
          * Call recover() to go back in the Runtime state.
          */
-        // void errorHook();
+        void errorHook();
 
         /** This hook is called by Orocos when the state machine transitions
          * from Running to Stopped after stop() has been called.
          */
-        // void stopHook();
+        void stopHook();
 
         /** This hook is called by Orocos when the state machine transitions
          * from Stopped to PreOperational, requiring the call to configureHook()
          * before calling start() again.
          */
-        // void cleanupHook();
+        void cleanupHook();
     };
 }
 

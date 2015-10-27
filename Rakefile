@@ -18,24 +18,29 @@ task :setup do
     end
 end
 
-task :default => :setup
-
 begin
     require 'hoe'
+    Hoe::plugin :yard
+    Hoe::RUBY_FLAGS.gsub!(/-w/, '')
+
+    config = Hoe.spec 'orogen' do
+        self.developer "Sylvain Joyeux", "sylvain.joyeux@dfki.de"
+
+        self.summary = 'Component generation for Orocos::RTT'
+        self.description = paragraphs_of('README.markdown', 3..6).join("\n\n")
+        self.changes     = paragraphs_of('History.txt', 0..1).join("\n\n")
+        licenses << "GPLv2 or later"
+
+        extra_deps <<
+            ['utilrb',   '>= 1.3.4'] <<
+            ['rake',     '>= 0.8'] <<
+            ['hoe-yard', '>= 0.1.2']
+
+        extra_dev_deps <<
+            ['flexmock', '>= 0.8.6']
+    end
+
     namespace 'dist' do
-        config = Hoe.spec 'orogen' do
-            self.developer "Sylvain Joyeux", "sylvain.joyeux@dfki.de"
-
-            self.summary = 'Component generation for Orocos::RTT'
-            self.description = paragraphs_of('README.txt', 3..6).join("\n\n")
-            self.changes     = paragraphs_of('History.txt', 0..1).join("\n\n")
-
-            extra_deps << 
-                ['utilrb',   '>= 1.3.4'] <<
-                ['rake',     '>= 0.8'] <<
-                ['nokogiri', '>= 1.3.3']
-        end
-
         Rake.clear_tasks(/dist:publish_docs/)
         Rake.clear_tasks(/dist:(re|clobber_|)docs/)
         task 'publish_docs' => 'redocs' do
@@ -47,7 +52,9 @@ begin
             end
         end
     end
+    hoe_spec.test_globs = ['test/suite.rb']
 
+    task :doc => :yard
 rescue LoadError
     STDERR.puts "cannot load the Hoe gem. Distribution is disabled"
 rescue Exception => e
@@ -57,33 +64,11 @@ rescue Exception => e
     end
 end
 
-do_doc = begin
-             require 'rdoc/task'
-             true
-         rescue LoadError => e
-             STDERR.puts "WARN: cannot load RDoc, documentation generation disabled"
-             STDERR.puts "WARN:   #{e.message}"
-         end
+Rake.clear_tasks(/^default$/)
+task :default => :setup
 
-if do_doc
-    task 'docs' => 'doc:all'
-    task 'clobber_docs' => 'doc:clobber'
-    task 'redocs' do
-        Rake::Task['clobber_docs'].invoke
-        if !system('rake', 'doc:all')
-            raise "failed to regenerate documentation"
-        end
-    end
-
-    namespace 'doc' do
-        task 'all' => %w{api}
-        task 'clobber' => 'clobber_api'
-        RDoc::Task.new("api") do |rdoc|
-            rdoc.rdoc_dir = 'doc'
-            rdoc.title    = "oroGen"
-            rdoc.options << '--show-hash'
-            rdoc.rdoc_files.include('lib/**/*.rb')
-        end
-    end
-end
+require 'utilrb/doc/rake'
+Utilrb.doc :include => ['lib/**/*.rb'],
+    :title => 'oroGen',
+    :plugins => ['utilrb']
 

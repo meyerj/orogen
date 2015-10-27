@@ -1,16 +1,57 @@
-module Orocos
-    def self.validate_toplevel_type(type)
-        if type < Typelib::ArrayType
-            raise Generation::ConfigError, "array types can be used only in a structure"
-        elsif type < Typelib::NumericType && !Typelib::Registry.base_rtt_type?(type)
-            raise Generation::ConfigError, "#{type.name} cannot be used as a toplevel type"
+module OroGen
+    module Gen
+    module RTT_CPP
+        def self.multiline_string_to_cxx(str)
+            if str
+                "\"#{str.split("\n").join("\\n").gsub('"', '\\"')}\""
+            else "\"\""
+            end
         end
-    end
 
-    module Generation
+        module ConfigurationObjectGeneration
+            # The property default value, formatted for as a C++ value
+            def cxx_default_value
+                if type < Typelib::EnumType
+                    type.namespace('::') + default_value.to_s
+                else
+                    default_value.inspect
+                end
+            end
+
+            def gen_dynamic_setter
+                if dynamic? && (setter_operation.task == task)
+                    #Adding user method
+                    task.add_base_method("bool", "set#{name.capitalize}",setter_operation.argument_signature).
+                        body("  return true;")
+                    task.add_user_method("bool", "set#{name.capitalize}",setter_operation.argument_signature).
+                        body( " return(#{task.name}Base::set#{name.capitalize}(value));")
+
+                    #Adding user method cal to updateDynamicProperties
+                    task.add_code_to_base_method_before "updateDynamicProperties","        if(!set#{name.capitalize}(_#{name}.get())) return false;\n"
+
+                    setter_operation.base_body= <<EOF
+//      The following steps happen within the base Implementation:
+//       if the task is not configured yet, update the classical property and return true
+//       if the task is configured OR running so far, call the user method to update the value
+//         if the user method return false, we return false too and do NOT update the classical value
+        if(isConfigured()){
+            if(!set#{name.capitalize}(#{setter_operation.argument_signature(true,false)})){
+                return false;
+            }
+        }
+        _#{name}.set(value);
+        return true;
+EOF
+                    setter_operation.hidden = true
+                end
+            end
+        end
+
         # Module that is used to add code generation functionality to
         # Spec::Property
         module PropertyGeneration
+            include ConfigurationObjectGeneration
+
             def used_types; [type] end
 
             def register_for_generation
@@ -22,14 +63,20 @@ module Orocos
 
                 task.add_base_member("property", "_#{name}",
                     "RTT::Property< #{type.cxx_name} >").
-                    initializer("_#{name}(\"#{name}\", \"#{doc}\")").
+                    initializer("_#{name}(\"#{name}\", #{Generation.multiline_string_to_cxx(doc)})").
                     constructor(constructor.join("\n"))
+
+
+                gen_dynamic_setter
+
             end
         end
 
         # Module that is used to add code generation functionality to
         # Spec::Attribute
         module AttributeGeneration
+            include ConfigurationObjectGeneration
+
             def used_types; [type] end
 
             def register_for_generation
@@ -43,6 +90,8 @@ module Orocos
                     "RTT::Attribute< #{type.cxx_name} >").
                     initializer("_#{name}(\"#{name}\")").
                     constructor(constructor.join("\n"))
+                
+                gen_dynamic_setter
             end
         end
 
@@ -64,7 +113,7 @@ module Orocos
                 constructor = []
                 constructor << "ports()->#{add}(_#{name})"
                 if doc
-                    constructor << "  .doc(\"#{doc}\")"
+                    constructor << "  .doc(#{Generation.multiline_string_to_cxx(doc)})"
                 end
                 constructor.last << ';'
 
@@ -84,7 +133,7 @@ module Orocos
         # Module that is used to add code generation functionality to
         # Spec::OutputPort
         module OutputPortGeneration
-            # Returns the name of the Orocos class for this port (i.e.  one of
+            # Returns the name of the RTT class for this port (i.e.  one of
             # ReadDataPort, WriteDataPort, DataPort, ReadBufferPort, ...)
 	    def orocos_class; "RTT::OutputPort" end
 
@@ -111,7 +160,7 @@ module Orocos
         # Module that is used to add code generation functionality to
         # Spec::InputPort
         module InputPortGeneration
-            # Returns the name of the Orocos class for this port (i.e.  one of
+            # Returns the name of the RTT class for this port (i.e.  one of
             # ReadDataPort, WriteDataPort, DataPort, ReadBufferPort, ...)
 	    def orocos_class; "RTT::InputPort" end
 
@@ -126,10 +175,23 @@ module Orocos
         # Module that is used to add code generation functionality to
         # Spec::Operation
         module OperationGeneration
-            def initialize(task, name)
+            def initialize
 		@method_name = self.name.dup
 		method_name[0, 1] = method_name[0, 1].downcase
             end
+
+            # Returns the C++ signature for this operation. Used in code
+            # generation only.
+	    def signature(with_names = true)
+		result = return_type[1].dup
+                if with_names
+                    result << " " <<
+                        if block_given? then yield
+                        else method_name
+                        end
+                end
+		result << "(" << argument_signature(with_names) << ")"
+	    end
 
             # Returns the set of types that this operation uses, as a
             # ValueSet of Typelib::Type classes.
@@ -138,7 +200,7 @@ module Orocos
             end
 
 	    # Returns the argument part of the C++ signature for this callable
-	    def argument_signature(with_names = true)
+	    def argument_signature(with_names = true, with_types = true)
 		arglist = arguments.map do |name, type, doc, qualified_type|
                     # Auto-add const-ref for non-trivial types
                     arg =
@@ -148,15 +210,14 @@ module Orocos
                             qualified_type
                         end
 
-		    if with_names then "#{arg} #{name}"
-		    else arg
-		    end
+		    ("#{arg if with_types} #{name if with_names}").strip
 		end
 
 		arglist.join(", ")
 	    end
 
             attr_accessor :body
+            attr_accessor :base_body
 
 	    # call-seq:
 	    #	method_name new_name -> self
@@ -175,14 +236,15 @@ module Orocos
                     end
 
                 constructor = "provides()->addOperation( _#{name})\n" +
-                    "    .doc(\"#{doc}\")"
+                    "    .doc(#{Generation.multiline_string_to_cxx(doc)})"
                 if !arguments.empty?
                     constructor += "\n" + arguments.map { |n, _, d| "    .arg(\"#{n}\", \"#{d}\")" }.join("\n")
                 end
 
-                if hidden? && !self.body
+                if hidden? && !self.base_body
                     raise InternalError, "a hidden operation must have a body"
                 end
+
 
                 body =
                     if self.body
@@ -192,17 +254,22 @@ module Orocos
                     else ""
                     end
 
-                add = if hidden? then "add_base_method"
-                      else "add_user_method"
-                      end
-
                 task.add_base_member("operation", "_#{name}", "RTT::Operation< #{signature(false)} >").
                     initializer("_#{name}(\"#{name}\", &#{task.basename}Base::#{method_name}, this, #{thread_flag})").
                     constructor("#{constructor};")
 
-                m = task.send(add, return_type[1], method_name, argument_signature).
-                    doc("Handler for the #{method_name} operation").
-                    body(body)
+
+                if hidden? || base_body
+                    task.add_base_method(return_type[1], method_name, argument_signature).
+                        body(base_body).
+                        doc("base implementation of the #{method_name} operation")
+                end
+                if !hidden?
+                    task.add_user_method(return_type[1], method_name, argument_signature). 
+                        body(body).
+                        doc(doc || "Handler for the #{method_name} operation")
+                end
+                    
             end
         end
 
@@ -259,11 +326,16 @@ module Orocos
                 name
             end
 
-            def initialize(project, name)
+            def initialize
                 hooks = %w{configure start update error exception fatal stop cleanup}
                 @base_hook_code = Hash.new
                 hooks.each do |hook_name|
                     @base_hook_code[hook_name] = Array.new
+                end
+
+                @user_hook_code = Hash.new
+                hooks.each do |hook_name|
+                    @user_hook_code[hook_name] = Array.new
                 end
 
                 @generation_handlers = Array.new
@@ -274,20 +346,6 @@ module Orocos
                 @base_header_code = Array.new
                 @base_implementation_code = Array.new
             end
-
-            # If true, then the initial state of this class cannot be specified.
-            # For orogen-declared tasks, it is the same as
-            # #needs_configuration?. This mechanism is here for classes that
-            # have not been generated by orogen and either have a no way to
-            # specify the initial state, or a non-standard one.
-            def fixed_initial_state?; @fixed_initial_state || needs_configuration? || (superclass.fixed_initial_state? if superclass) end
-
-            # Declares that the initial state of this class cannot be specified.
-            # For orogen-declared tasks, it is the same as
-            # #needs_configuration?. This mechanism is here for classes that
-            # have not been generated by orogen and either have a no way to
-            # specify the initial state, or a non-standard one.
-            def fixed_initial_state; @fixed_initial_state = true end
 
             def check_uniqueness(name)
                 super
@@ -332,72 +390,6 @@ module Orocos
                 state_name.upcase
             end
 
-            # This method is an easier way use boost::shared_ptr in a task
-            # context interface. For instance, instead of writing
-            #
-            #   input_port 'image', '/boost/shared_ptr</Image>'
-            #
-            # you can write
-            #
-            #   input_port 'image', shared_ptr('/Image')
-            #
-            # Additionally, this method makes sure that the corresponding type
-            # is actually defined on the project's typekit.
-            def shared_ptr(name)
-                base_type = project.find_type(name)
-                full_name = "/boost/shared_ptr<#{base_type.name}>"
-                begin
-                    project.find_type(full_name)
-                rescue Typelib::NotFound
-                    project.typekit { shared_ptr(name) }
-                    project.find_type(full_name)
-                end
-            end
-
-            # This method is an easier way use boost::shared_ptr in a task
-            # context interface. For instance, instead of writing
-            #
-            #   input_port 'image', '/RTT/ReadOnlyPointer</Image>'
-            #
-            # you can write
-            #
-            #   input_port 'image', ro_ptr('/Image')
-            #
-            # Additionally, this method makes sure that the corresponding type
-            # is actually defined on the project's typekit.
-            def ro_ptr(name)
-                base_type =
-                    begin
-                        project.find_type(name)
-                    rescue Typelib::NotFound
-                        raise ArgumentError, "type #{name} is not available"
-                    end
-
-                full_name = "/RTT/extras/ReadOnlyPointer<#{base_type.name}>"
-                begin
-                    project.find_type(full_name)
-                rescue Typelib::NotFound
-                    project.typekit { ro_ptr(name) }
-                    project.find_type(full_name)
-                end
-            end
-
-            # Interface for RTT 1.x methods
-            #
-            # This raises NotImplementedError with a message asking to convert
-            # to RTT2 operations
-            def method(name)
-                raise NotImplementedError, "RTT 1.x methods must be replaced by RTT 2.x operations. Use #operation"
-            end
-
-            # Interface for RTT 1.x commands
-            #
-            # This raises NotImplementedError with a message asking to convert
-            # to RTT2 operations
-            def command(name)
-                raise NotImplementedError, "RTT 1.x commands must be replaced by RTT 2.x operations. Use #operation"
-            end
-	    
 	    # The set of task libraries that are required by this task context
             #
             # This is the set of task libraries that implement our superclasses
@@ -412,7 +404,7 @@ module Orocos
             # Returns the set of types that are used to define this task
             # context, as an array of subclasses of Typelib::Type.
             def interface_types
-                (all_properties + all_operations + all_ports + all_dynamic_ports).
+                (all_properties + all_attributes + all_operations + all_ports + all_dynamic_ports).
                     map { |obj| obj.used_types }.
                     flatten.to_value_set.to_a
             end
@@ -445,16 +437,35 @@ module Orocos
                     begin
                         while true
                             line = file.readline
-                            if Regexp.new(taskname + "\(.*\)").match(line)
-                                if $1 =~ /TaskCore::TaskState/
-                                    puts  "\nWarning: 'needs_configuration' has been specified for the task '#{taskname}', but the task's constructor has not been updated after this change.\n\n Note: setting a TaskState is not allowed in combination with using 'needs_configuration'.\n Constructors in #{filename} and corresponding files require adaption."
+                            begin
+                                if Regexp.new(taskname + "\(.*\)").match(line)
+                                    if $1 =~ /TaskCore::TaskState/
+                                        puts  "\nWarning: 'needs_configuration' has been specified for the task '#{taskname}', but the task's constructor has not been updated after this change.\n\n Note: setting a TaskState is not allowed in combination with using 'needs_configuration'.\n Constructors in #{filename} and corresponding files require adaption."
+                                    end
                                 end
+                            rescue ArgumentError => e 
+                                STDERR.puts "[CRITICAL] Could not parse \'#{line}\' maybe it contains invalid chars?"
+                                raise e
                             end
                         end
                     rescue EOFError
                     end
                 end
             end
+
+            def create_dynamic_updater(name, superclass_has_dynamic)
+                add_base_method("bool",name)
+
+                if superclass_has_dynamic
+                    #Call the superclass method if needed, returning false if it fail. Otherwise check our dynamic properties
+                    #they are generated in register_for_generation, or returning true in the end
+                    add_code_to_base_method_after name,"        return #{superclass.name}::#{name}();\n"
+                else                
+                    #No superclass code, so return simply true
+                    add_code_to_base_method_after name,"        return true;\n"
+                end
+            end
+
 
 	    # Generate the code files for this task. This builds to classes:
 	    #
@@ -477,20 +488,29 @@ module Orocos
                         returns("int").
                         doc("returns the PID for this task")
                 else
-                    add_base_method("std::string", "getModelName", "").
+                    add_base_method("std::string", "getModelName","").
                         body("    return \"#{name}\";")
                 end
 
-                new_operations.each(&:register_for_generation)
-                self_properties.each(&:register_for_generation)
+            
+                if(has_dynamic_properties?)
+                    create_dynamic_updater("updateDynamicProperties",superclass.has_dynamic_properties?)
+                end
+
+                if(has_dynamic_attributes?)
+                    create_dynamic_updater("updateDynamicAttributes",superclass.has_dynamic_attributes?)
+                end
+
+                self_properties.each(&:register_for_generation) #needs to be called before operations, because it adds code to them
                 self_attributes.each(&:register_for_generation)
+                new_operations.each(&:register_for_generation)
                 self_ports.each(&:register_for_generation)
                 extensions.each do |ext|
                     if ext.respond_to?(:register_for_generation)
                         ext.register_for_generation(self)
                     end
                 end
-
+               
                 generation_handlers.each do |h|
                     if h.arity == 1
                         h.call(self)
@@ -607,12 +627,28 @@ module Orocos
                 in_hook(@base_hook_code, hook, string, &block)
             end
 
+            # Call to add some code to the generated hooks in the Base task
+            # classes
+            def in_user_hook(hook, string = nil, &block)
+                in_hook(@user_hook_code, hook, string, &block)
+            end
+
+            # [{String=>Set<String,#call>}] a set of code snippets that are
+            # inserted in the base task class hooks. It is a mapping from a hook name
+            # (such as 'update') to the set of snippets. Snippets can be given
+            # as strings or as an object whose #call method is going to return
+            # the code as a string
             attr_reader :base_hook_code
+
+            # [{String=>Set<String,#call>}] a set of code snippets that are
+            # inserted in the task class hooks. It is a mapping from a hook name
+            # (such as 'update') to the set of snippets. Snippets can be given
+            # as strings or as an object whose #call method is going to return
+            # the code as a string
+            attr_reader :user_hook_code
 
             enumerate_inherited_set "base_method", "base_methods"
             enumerate_inherited_set "user_method", "user_methods"
-            attr_reader :base_initializers
-            attr_reader :base_constructions
 
             # Base class for code generation in tasks
             class GeneratedObject
@@ -626,6 +662,26 @@ module Orocos
                         end
                         code = TaskContextGeneration.validate_code_object(code, block)
                         @#{name} = code
+                        self
+                    end
+                    def add_to_#{name}_before(code, &block)
+                        if !@#{name}
+                            #{name}(code,&block)
+                        else
+                            code = TaskContextGeneration.validate_code_object(code, block)
+                            old_code = @#{name}
+                            @#{name} = lambda { |*args| code.call(*args) + old_code.call(*args) }
+                        end
+                        self
+                    end
+                    def add_to_#{name}_after(code, &block)
+                        if !@#{name}
+                            #{name}(code,&block)
+                        else
+                            code = TaskContextGeneration.validate_code_object(code, block)
+                            old_code = @#{name}
+                            @#{name} = lambda { |*args| old_code.call(*args) + code.call(*args) }
+                        end
                         self
                     end
                     EOD
@@ -711,8 +767,7 @@ module Orocos
                 attr_reader :return_type
                 attr_reader :name
                 attr_reader :signature
-                attr_reader :body
-
+                
                 def initialize(task, return_type, name, signature)
                     super(task)
 
@@ -744,7 +799,7 @@ module Orocos
                 end
             end
 
-            # Helper method for #add_base_method and #add_method
+            # Helper method for {#add_base_method} and {#add_user_method}
             def add_method(kind, return_type, name, signature)
                 self_set = send("self_#{kind}")
                 if !name.respond_to?(:to_str)
@@ -788,6 +843,31 @@ module Orocos
                 all_base_methods.any? { |m| m.name == name }
             end
 
+            # This function adds @param code [String] AFTER the already defined code on the 
+            # @param name [String] given method
+            def add_code_to_base_method_after(name,code)
+                self_base_methods.each do |p|
+                    if p.name == name
+                        p.add_to_body_after(code)
+                        return self 
+                    end
+                end
+                raise ArgumentError "Method #{name} could not be found"
+            end
+            
+            # This function adds @param code [String] BEFORE the already defined code on the 
+            # @param name [String] given method
+            def add_code_to_base_method_before(name,code)
+                self_base_methods.each do |p|
+                    if p.name == name
+                        p.add_to_body_before(code)
+                        return self 
+                    end
+                end
+                raise ArgumentError "Method #{name} could not be found"
+            end
+
+
             # Define a new method on the user-part class of this task
             #
             # It will also add a pure-virtual method with the same signature on
@@ -800,8 +880,8 @@ module Orocos
                 if !has_base_method?(name)
                     # Add a pure virtual method to remind the user that he
                     # should add it to its implementation
-                    add_base_method(return_type, name, signature).
-                        doc "If the compiler issues an error at this point, it is probably that",
+                    m = add_base_method(return_type, name, signature)
+                    m.doc "If the compiler issues an error at this point, it is probably that",
                             "you forgot to add the corresponding method to the #{self.name} class."
                 end
                 add_method("user_methods", return_type, name, signature)
@@ -839,27 +919,7 @@ module Orocos
                 add_base_member(kind, name).destructor(code, &block)
             end
 	end
-
-        ConfigurationObject = Spec::ConfigurationObject
-        Attribute           = Spec::Attribute
-        Attribute.include AttributeGeneration
-        Property            = Spec::Property
-        Property.include PropertyGeneration
-
-        Operation           = Spec::Operation
-        Operation.include OperationGeneration
-
-        Port                = Spec::Port
-        Port.include PortGeneration
-        OutputPort          = Spec::OutputPort
-        OutputPort.include OutputPortGeneration
-        InputPort           = Spec::InputPort
-        InputPort.include InputPortGeneration
-        DynamicInputPort    = Spec::DynamicInputPort
-        DynamicOutputPort   = Spec::DynamicInputPort
-
-        TaskContext         = Spec::TaskContext
-        TaskContext.include TaskContextGeneration
+    end
     end
 end
 
